@@ -73,6 +73,103 @@ int main(int argc, char **argv) {
         
 }
 
+__global__ void vector_max_kernel4(float *in, float *out, int N)
+{
+	
+     int block_id = blockIdx.x + gridDim.x * blockIdx.y;
+     int thread_id = blockDim.x * block_id + threadIdx.x;
+
+	
+	__shared__ float s[256];
+	int t = threadIdx.x;
+	s[t] = in[thread_id];
+	__syncthreads();
+
+	int h = 128;
+	for(int i = 0; i < 8; i++)
+   	{
+			
+			if(threadIdx.x < h)
+			{
+				float max = s[threadIdx.x];
+				float max2 = s[threadIdx.x + h];
+				if(max2 > max)
+				{
+					s[threadIdx.x] = max2;
+				}
+			}
+		__syncthreads();
+		h = h/2;
+	} 
+
+	if(threadIdx.x == 0)
+	{
+		out[block_id] = s[threadIdx.x];
+	}
+}
+
+__global__ void vector_max_kernel3(float *in, float *out, int N){
+		
+     int block_id = blockIdx.x + gridDim.x * blockIdx.y;
+     int thread_id = blockDim.x * block_id + threadIdx.x;
+     
+	__shared__ float s[256];
+	int t = threadIdx.x;
+	s[t] = in[thread_id];
+	__syncthreads();
+	
+	for(int i = 2; i <= 256; i *= 2)
+		{
+			if(threadIdx.x%i == 0)
+			{
+				float max = s[threadIdx.x];
+				float max2 = s[threadIdx.x + i/2];
+				if(max2 > max)
+				{
+					s[threadIdx.x] = max2;
+				}
+			}
+		}
+
+	if(threadIdx.x == 0)
+	{
+		out[block_id] = s[threadIdx.x];
+	}
+}
+
+__global__ void vector_max_kernel2(float *in, float *out, int N){
+
+	int block_id = blockIdx.x + gridDim.x * blockIdx.y;
+	int thread_id = blockDim.x * block_id + threadIdx.x;
+
+
+	__shared__ float s[256];
+	int t = threadIdx.x;
+	s[t] = in[thread_id];
+	__syncthreads();
+	
+
+	float max = 0.0;
+	if(threadIdx.x == 0)
+	{
+		int end = threads_per_block;
+		if(thread_id + threads_per_block > N)
+		{
+			end = N - thread_id;
+		}
+
+		max = s[threadIdx.x];
+		for(int i = 1; i < end; i++)
+		{
+			if(max < s[i])
+			{	
+				max = s[i];
+			}	
+		}		
+	out[block_id] = max;
+	
+	}
+}
 
 // A GPU kernel that computes the maximum value of a vector
 // (each lead thread (threadIdx.x == 0) computes a single value
@@ -104,8 +201,7 @@ __global__ void vector_max_kernel(float *in, float *out, int N) {
         }
 
         out[block_id] = max;
-
-    }
+	}
 }
 
 // Returns the maximum value within a vector of length N
@@ -120,7 +216,6 @@ float GPU_vector_max(float *in_CPU, int N, int kernel_code) {
 
     // Allocate GPU memory for the inputs and the result
     long long memory_start_time = start_timer();
-
     float *in_GPU, *out_GPU;
     if (cudaMalloc((void **) &in_GPU, vector_size) != cudaSuccess) die("Error allocating GPU memory");
     if (cudaMalloc((void **) &out_GPU, vector_size) != cudaSuccess) die("Error allocating GPU memory");
@@ -140,27 +235,27 @@ float GPU_vector_max(float *in_CPU, int N, int kernel_code) {
     // Execute the kernel to compute the vector sum on the GPU
     long long kernel_start_time;
     kernel_start_time = start_timer();
-
+	
+    while(N > 1)
+    {
     switch(kernel_code){
     case 1 : 
         vector_max_kernel <<< grid_size , threads_per_block >>> (in_GPU, out_GPU, N);
         
         break;
     case 2 :
-        //LAUNCH KERNEL FROM PROBLEM 2 HERE
-        die("KERNEL NOT IMPLEMENTED YET\n");
+        vector_max_kernel2 <<< grid_size, threads_per_block >>> (in_GPU, out_GPU, N);
         break;
     case 3 :
-        //LAUNCH KERNEL FROM PROBLEM 3 HERE
-        die("KERNEL NOT IMPLEMENTED YET\n");
+        vector_max_kernel3 <<< grid_size, threads_per_block >>> (in_GPU, out_GPU, N);
         break;
     case 4 :
-        //LAUNCH KERNEL FROM PROBLEM 4 HERE
-        die("KERNEL NOT IMPLEMENTED YET\n");
+        vector_max_kernel4 <<< grid_size, threads_per_block >>> (in_GPU, out_GPU, N);
         break;
     default :
         die("INVALID KERNEL CODE\n");
     }
+    
     
     cudaDeviceSynchronize();  // this is only needed for timing purposes
     stop_timer(kernel_start_time, "\t Kernel execution");
@@ -175,7 +270,12 @@ float GPU_vector_max(float *in_CPU, int N, int kernel_code) {
     checkError();
     cudaDeviceSynchronize();  // this is only needed for timing purposes
     stop_timer(memory_start_time, "\tTransfer from GPU");
-    			    
+
+	N = num_blocks;
+	vector_size = N * sizeof(float);
+	num_blocks = (int)((float)(N+threads_per_block -1)/(float)threads_per_block);
+	cudaMemcpy(in_GPU, out_CPU, vector_size, cudaMemcpyHostToDevice);
+    }			    
     // Free the GPU memory
     cudaFree(in_GPU);
     cudaFree(out_GPU);
